@@ -1,11 +1,5 @@
-"""
-Module 5 Week A — ML Evaluation Pipeline (Final Submission Version)
-"""
 
 import pandas as pd
-import numpy as np
-import warnings
-
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -13,125 +7,118 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import warnings
 
 warnings.filterwarnings("ignore")
-np.random.seed(42)
 
 
-# =========================
-# LOAD DATA
-# =========================
+
+
+
+NUMERIC_FEATURES = []
+CATEGORICAL_FEATURES = []
+
+
+
+# Data Loading
+
 def load_and_prepare(filepath="data/telecom_churn.csv"):
-
+    """Load data and separate features from target."""
     df = pd.read_csv(filepath)
-    df.columns = df.columns.str.strip().str.lower()
 
-    if "customer_id" in df.columns:
-        df = df.drop(columns=["customer_id"])
+    X = df.drop(columns=['churned', 'customer_id'])
+    y = df['churned']
 
-    X = df.drop(columns=["churned"])
-    y = df["churned"]
+   
+    global NUMERIC_FEATURES, CATEGORICAL_FEATURES
+
+    NUMERIC_FEATURES = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
+    CATEGORICAL_FEATURES = X.select_dtypes(include=['object']).columns.tolist()
 
     return X, y
 
 
-# =========================
-# PREPROCESSOR
-# =========================
+
+# Preprocessing
+
 def build_preprocessor():
+    """Build a ColumnTransformer for numeric and categorical features."""
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', StandardScaler(), NUMERIC_FEATURES),
+            ('cat', OneHotEncoder(drop='first', handle_unknown='ignore'), CATEGORICAL_FEATURES)
+        ]
+    )
 
-    numeric_features = [
-        "tenure",
-        "monthly_charges",
-        "total_charges",
-        "num_support_calls",
-        "senior_citizen"
-    ]
-
-    categorical_features = [
-        "gender",
-        "contract_type",
-        "internet_service",
-        "payment_method",
-        "has_partner",
-        "has_dependents"
-    ]
-
-    return ColumnTransformer([
-        ("num", StandardScaler(), numeric_features),
-        ("cat", OneHotEncoder(drop="first", handle_unknown="ignore"), categorical_features)
-    ])
+    return preprocessor
 
 
-# =========================
-# MODELS
-# =========================
+
+# Models
+
 def define_models():
+    """Define the 5 model configurations to compare."""
+    preprocessor = build_preprocessor()
 
-    prep = build_preprocessor()
-
-    return {
+    models = {
         "LogReg_default": Pipeline([
-            ("prep", prep),
-            ("model", LogisticRegression(
+            ('preprocessor', preprocessor),
+            ('model', LogisticRegression(
                 C=1.0,
-                max_iter=1000,
                 random_state=42,
-                class_weight="balanced"
+                max_iter=1000,
+                class_weight='balanced'
             ))
         ]),
 
         "LogReg_L1": Pipeline([
-            ("prep", prep),
-            ("model", LogisticRegression(
+            ('preprocessor', preprocessor),
+            ('model', LogisticRegression(
                 C=0.1,
-                penalty="l1",
-                solver="saga",
-                max_iter=1000,
+                penalty='l1',
+                solver='saga',
                 random_state=42,
-                class_weight="balanced"
+                max_iter=1000,
+                class_weight='balanced'
             ))
         ]),
 
         "RidgeClassifier": Pipeline([
-            ("prep", prep),
-            ("model", RidgeClassifier(
+            ('preprocessor', preprocessor),
+            ('model', RidgeClassifier(
                 alpha=1.0,
-                class_weight="balanced",
-                random_state=42
+                random_state=42,
+                class_weight='balanced'
             ))
         ]),
 
         "Dummy_most_frequent": Pipeline([
-            ("prep", prep),
-            ("model", DummyClassifier(strategy="most_frequent"))
+            ('preprocessor', preprocessor),
+            ('model', DummyClassifier(strategy='most_frequent'))
         ]),
 
         "Dummy_stratified": Pipeline([
-            ("prep", prep),
-            ("model", DummyClassifier(strategy="stratified", random_state=42))
+            ('preprocessor', preprocessor),
+            ('model', DummyClassifier(strategy='stratified', random_state=42))
         ])
     }
 
+    return models
 
-# =========================
-# CROSS VALIDATION
-# =========================
-def evaluate_models(models, X, y, cv=5):
 
-    skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+
+# Cross Validation
+
+def evaluate_models(models, X, y, cv=5, random_state=42):
+    """Run cross-validation on all models and return results."""
+    skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
+
+    scoring = ["accuracy", "precision", "recall", "f1"]
 
     results = []
 
-    for name, model in models.items():
-
-        scores = cross_validate(
-            model,
-            X,
-            y,
-            cv=skf,
-            scoring=["accuracy", "precision", "recall", "f1"]
-        )
+    for name, pipeline in models.items():
+        scores = cross_validate(pipeline, X, y, cv=skf, scoring=scoring)
 
         results.append({
             "model": name,
@@ -145,87 +132,95 @@ def evaluate_models(models, X, y, cv=5):
     return pd.DataFrame(results)
 
 
-# =========================
-# TEST EVALUATION
-# =========================
-def evaluate_all_models_on_test(models, X_train, X_test, y_train, y_test):
+# Final Evaluation
 
-    results = []
+def final_evaluation(pipeline, X_train, X_test, y_train, y_test):
+    """Train and evaluate on test set."""
+    pipeline.fit(X_train, y_train)
+    y_pred = pipeline.predict(X_test)
 
-    for name, model in models.items():
-
-        model.fit(X_train, y_train)
-        preds = model.predict(X_test)
-
-        results.append({
-            "model": name,
-            "accuracy": accuracy_score(y_test, preds),
-            "precision": precision_score(y_test, preds),
-            "recall": recall_score(y_test, preds),
-            "f1": f1_score(y_test, preds)
-        })
-
-    return pd.DataFrame(results)
+    return {
+        "accuracy": accuracy_score(y_test, y_pred),
+        "precision": precision_score(y_test, y_pred),
+        "recall": recall_score(y_test, y_pred),
+        "f1": f1_score(y_test, y_pred)
+    }
 
 
-# =========================
-# MAIN
-# =========================
+
+# Recommendation
+
+def recommend_model(results_df):
+    print("\n=== Model Comparison Table (CV results) ===")
+    print(results_df.to_string(index=False))
+
+    print("\n=== Recommendation ===")
+    print("Write your recommendation in the PR description.")
+
+
+
+# Main Execution
+
 if __name__ == "__main__":
 
     X, y = load_and_prepare()
 
-    print(f"Data: {X.shape[0]} rows | Features: {X.shape[1]}")
+    print(f"Data: {X.shape[0]} rows, {X.shape[1]} features")
     print(f"Churn rate: {y.mean():.2%}")
 
+    # Train/Test Split
     X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
+        X, y,
         test_size=0.2,
         random_state=42,
         stratify=y
     )
 
+    print(f"Train: {X_train.shape[0]} rows | Test: {X_test.shape[0]} rows")
+
     models = define_models()
 
-    # CV
-    cv_results = evaluate_models(models, X_train, y_train)
+    # Cross-validation
+    results = evaluate_models(models, X_train, y_train)
+    recommend_model(results)
 
-    print("\n=== CROSS VALIDATION RESULTS ===")
-    print(cv_results)
+    # Select best non-dummy model
+    non_dummy = results[~results["model"].str.startswith("Dummy")]
 
-    # TEST
-    test_results = evaluate_all_models_on_test(
-        models,
+    best_model_name = non_dummy.loc[
+        non_dummy["f1_mean"].idxmax(), "model"
+    ]
+
+    best_pipeline = models[best_model_name]
+
+    # Final evaluation
+    print(f"\n=== Final Test-Set Evaluation: {best_model_name} ===")
+
+    test_metrics = final_evaluation(
+        best_pipeline,
         X_train, X_test,
         y_train, y_test
     )
 
-    print("\n=== TEST RESULTS (ALL MODELS) ===")
-    print(test_results)
+    for metric, value in test_metrics.items():
+        print(f"{metric}: {value:.4f}")
 
-    # BEST MODEL (TEST BASED)
-    real_models = test_results[~test_results["model"].str.contains("Dummy")]
+    # Compare CV vs Test
+    cv_f1 = non_dummy.loc[
+        non_dummy["model"] == best_model_name, "f1_mean"
+    ].values[0]
 
-    best_row = real_models.sort_values("f1", ascending=False).iloc[0]
-    best_model = best_row["model"]
-    best_f1 = best_row["f1"]
+    print(f"\nCV F1 estimate: {cv_f1:.4f} | Test F1: {test_metrics['f1']:.4f}")
+    
+    
+    """
+Recommendation:
 
-    dummy_f1 = test_results[test_results["model"] == "Dummy_stratified"]["f1"].values[0]
+Based on the cross-validation results, the RidgeClassifier is recommended as the best-performing model, achieving the highest F1 score (~0.34) among all non-dummy models, with a slightly better balance between precision and recall compared to Logistic Regression variants. Although accuracy is around 0.61, accuracy alone is misleading in this problem due to class imbalance, as demonstrated by the Dummy_most_frequent model achieving a high accuracy of ~0.84 while completely failing to identify churners (F1 = 0.0). This highlights that correctly identifying the minority class (churned customers) is more important than overall accuracy.
 
-    print("\n BEST MODEL (TEST-based):", best_model)
+The RidgeClassifier achieves moderate recall (~0.62), meaning it successfully captures a reasonable portion of churners, but at the cost of lower precision (~0.24), indicating some false positives. This trade-off is acceptable in churn prediction, where missing a churner is typically more costly than incorrectly flagging a non-churner.
 
-    # =========================
-    # FINAL RECOMMENDATION (UPDATED)
-    # =========================
-    print("\n=== RECOMMENDATION ===")
+Compared to the baselines, the model significantly outperforms the Dummy_stratified classifier (F1 ~0.17), achieving roughly double its F1 score (~0.34). This shows that the model is learning meaningful patterns beyond random guessing, although the improvement is still modest, suggesting that the predictive signal in the features may be limited for linear models.
 
-    print(f"""
-We recommend using Logistic Regression (default) as the final model, as it achieved the highest F1 score on the held-out test set ({best_f1:.4f}) among all evaluated configurations. This indicates it provides the best balance between precision and recall, which is important in churn prediction where identifying actual churners is more critical than overall accuracy.
-
-Although RidgeClassifier shows very similar performance, the difference is small and not statistically significant, meaning both models perform comparably well on this dataset. However, Logistic Regression has a slight advantage in overall F1 and better generalization consistency.
-
-Accuracy is not a reliable metric in this problem due to class imbalance (~16% churn), as shown by the Dummy classifier achieving high accuracy ({test_results[test_results["model"]=="Dummy_most_frequent"]["accuracy"].values[0]:.4f}) while failing to detect churners.
-
-Compared to the stratified baseline (F1 = {dummy_f1:.4f}), the selected model significantly improves performance, confirming that it learns meaningful patterns beyond random guessing. However, the overall F1 level (~{best_f1:.2f}) suggests that linear models still have limited predictive power, and more advanced models may be required.
-""")
+Finally, the test-set evaluation (F1 ~0.38) slightly exceeds the cross-validation estimate (~0.34), confirming that the model generalizes reasonably well and that the CV results were not overly optimistic. However, the overall performance indicates room for improvement, and more advanced models (e.g., tree-based methods) may be needed to achieve stronger predictive power.
+"""
